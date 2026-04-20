@@ -1,4 +1,4 @@
-module github.com/rbryce90/pulse
+module github.com/rbryce90/changeName
 
 go 1.22
 

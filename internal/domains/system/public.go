@@ -9,7 +9,7 @@ package system
 import (
 	"time"
 
-	"github.com/rbryce90/pulse/internal/types"
+	"github.com/rbryce90/changeName/internal/types"
 )
 
 type ProcessInfo struct {

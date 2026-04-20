@@ -3,7 +3,7 @@ package system
 import (
 	"context"
 
-	"github.com/rbryce90/pulse/internal/mcp"
+	"github.com/rbryce90/changeName/internal/mcp"
 )
 
 // MCP tools this domain exposes. Each is a small struct implementing mcp.Tool.

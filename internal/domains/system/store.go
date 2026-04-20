@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/rbryce90/pulse/internal/types"
+	"github.com/rbryce90/changeName/internal/types"
 )
 
 //go:embed schema.sql

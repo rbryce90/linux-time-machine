@@ -1,4 +1,4 @@
-# pulse
+# changeName
 
 AI-native local system observability. One binary. No cloud.
 

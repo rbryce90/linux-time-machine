@@ -5,8 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/rbryce90/pulse/internal/mcp"
-	"github.com/rbryce90/pulse/internal/tui"
+	"github.com/rbryce90/changeName/internal/mcp"
+	"github.com/rbryce90/changeName/internal/tui"
 )
 
 // Deps is the shared plumbing each domain may use. A domain that doesn't

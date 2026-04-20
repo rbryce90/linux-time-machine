@@ -1,6 +1,6 @@
-# Binaries (anchored to repo root so cmd/pulse/ dir is not matched)
-/pulse
-/pulse-*
+# Binaries (anchored to repo root so cmd/changeName/ dir is not matched)
+/changeName
+/changeName-*
 /bin/
 /dist/
 
