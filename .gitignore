@@ -1,8 +1,8 @@
-# Binaries
-pulse
-pulse-*
-bin/
-dist/
+# Binaries (anchored to repo root so cmd/pulse/ dir is not matched)
+/pulse
+/pulse-*
+/bin/
+/dist/
 
 # Go
 *.exe
