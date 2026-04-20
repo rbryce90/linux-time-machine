@@ -30,7 +30,7 @@ func New(cfg Config) (*App, error) {
 		Registry: NewRegistry(),
 		DB:       db,
 		MCP:      mcp.NewServer(),
-		TUI:      tui.NewApp(),
+		TUI:      tui.NewApp(Name),
 	}, nil
 }
 
@@ -45,14 +45,14 @@ func (a *App) Run(parent context.Context) error {
 	if err := a.Registry.StartAll(ctx, deps); err != nil {
 		return fmt.Errorf("registry start: %w", err)
 	}
-	log.Printf("pulse: started domains=%v", a.Registry.Names())
+	log.Printf("%s: started domains=%v", Name, a.Registry.Names())
 
 	errCh := make(chan error, 2)
 	go func() { errCh <- a.MCP.Start(ctx) }()
 	go func() { errCh <- a.TUI.Run(ctx) }()
 
 	<-ctx.Done()
-	log.Printf("pulse: shutting down")
+	log.Printf("%s: shutting down", Name)
 
 	a.Registry.StopAll()
 	_ = a.DB.Close()

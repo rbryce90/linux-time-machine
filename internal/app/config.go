@@ -20,7 +20,7 @@ type DomainConfig struct {
 
 func DefaultConfig() Config {
 	return Config{
-		DBPath: "./pulse.db",
+		DBPath: "./" + Name + ".db",
 		Domains: DomainToggles{
 			System:  DomainConfig{Enabled: true, SampleInterval: 1},
 			Events:  DomainConfig{Enabled: false, SampleInterval: 0},

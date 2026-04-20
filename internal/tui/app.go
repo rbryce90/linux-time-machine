@@ -7,11 +7,12 @@ import (
 )
 
 type App struct {
+	name   string
 	panels []Panel
 }
 
-func NewApp() *App {
-	return &App{}
+func NewApp(name string) *App {
+	return &App{name: name}
 }
 
 func (a *App) AddPanel(p Panel) {
@@ -28,7 +29,7 @@ func (a *App) AddProvider(p PanelProvider) {
 // registered panels once and blocks until ctx is cancelled.
 func (a *App) Run(ctx context.Context) error {
 	var b strings.Builder
-	b.WriteString("pulse — registered panels:\n")
+	fmt.Fprintf(&b, "%s — registered panels:\n", a.name)
 	for _, p := range a.panels {
 		fmt.Fprintf(&b, "  - %s\n", p.Title())
 	}
