@@ -1,0 +1,31 @@
+# Binaries
+pulse
+pulse-*
+bin/
+dist/
+
+# Go
+*.exe
+*.test
+*.out
+vendor/
+go.work.sum
+
+# Local data
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+data/
+.pulse/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Env
+.env
+.env.local
