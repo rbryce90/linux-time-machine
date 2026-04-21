@@ -7,9 +7,9 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/rbryce90/changeName/internal/mcp"
-	"github.com/rbryce90/changeName/internal/storage"
-	"github.com/rbryce90/changeName/internal/tui"
+	"github.com/rbryce90/linux-time-machine/internal/mcp"
+	"github.com/rbryce90/linux-time-machine/internal/storage"
+	"github.com/rbryce90/linux-time-machine/internal/tui"
 )
 
 type App struct {

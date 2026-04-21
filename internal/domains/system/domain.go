@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/rbryce90/changeName/internal/app"
+	"github.com/rbryce90/linux-time-machine/internal/app"
 )
 
 type Config struct {

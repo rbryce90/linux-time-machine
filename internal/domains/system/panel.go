@@ -3,7 +3,7 @@ package system
 import (
 	"fmt"
 
-	"github.com/rbryce90/changeName/internal/tui"
+	"github.com/rbryce90/linux-time-machine/internal/tui"
 )
 
 type panel struct {

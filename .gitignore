@@ -1,6 +1,6 @@
-# Binaries (anchored to repo root so cmd/changeName/ dir is not matched)
-/changeName
-/changeName-*
+# Binaries (anchored to repo root so cmd/linux-time-machine/ dir is not matched)
+/linux-time-machine
+/linux-time-machine-*
 /bin/
 /dist/
 

@@ -5,8 +5,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/rbryce90/changeName/internal/app"
-	"github.com/rbryce90/changeName/internal/domains/system"
+	"github.com/rbryce90/linux-time-machine/internal/app"
+	"github.com/rbryce90/linux-time-machine/internal/domains/system"
 )
 
 func main() {

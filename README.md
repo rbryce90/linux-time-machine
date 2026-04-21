@@ -1,4 +1,4 @@
-# changeName
+# linux-time-machine
 
 AI-native local system observability. One binary. No cloud.
 

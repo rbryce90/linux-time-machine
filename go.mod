@@ -1,4 +1,4 @@
-module github.com/rbryce90/changeName
+module github.com/rbryce90/linux-time-machine
 
 go 1.22
 
