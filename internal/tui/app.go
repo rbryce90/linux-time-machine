@@ -8,15 +8,18 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/rbryce90/linux-time-machine/internal/tui/theme"
 )
 
 type App struct {
-	name   string
-	panels []Panel
+	name    string
+	panels  []Panel
+	startAt time.Time
 }
 
 func NewApp(name string) *App {
-	return &App{name: name}
+	return &App{name: name, startAt: time.Now()}
 }
 
 func (a *App) AddPanel(p Panel) {
@@ -31,7 +34,7 @@ func (a *App) AddProvider(p PanelProvider) {
 
 func (a *App) Run(ctx context.Context) error {
 	p := tea.NewProgram(
-		newModel(a.name, a.panels),
+		newModel(a.name, a.startAt, a.panels),
 		tea.WithContext(ctx),
 		tea.WithAltScreen(),
 	)
@@ -46,14 +49,16 @@ func tick() tea.Cmd {
 }
 
 type model struct {
-	name   string
-	panels []Panel
-	width  int
-	height int
+	name    string
+	startAt time.Time
+	panels  []Panel
+	width   int
+	height  int
+	now     time.Time
 }
 
-func newModel(name string, panels []Panel) model {
-	return model{name: name, panels: panels}
+func newModel(name string, startAt time.Time, panels []Panel) model {
+	return model{name: name, startAt: startAt, panels: panels, now: time.Now()}
 }
 
 func (m model) Init() tea.Cmd {
@@ -73,6 +78,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 	case tickMsg:
+		m.now = time.Time(msg)
 		for _, p := range m.panels {
 			p.Refresh()
 		}
@@ -81,42 +87,39 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-var (
-	titleStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("#7aa2f7")). // tokyo night blue
-			MarginBottom(1)
-
-	panelTitleStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("#bb9af7")). // tokyo night purple
-			Underline(true)
-
-	panelStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("#565f89")). // tokyo night comment
-			Padding(0, 1).
-			MarginTop(1)
-
-	helpStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#565f89")).
-			MarginTop(1)
-)
-
 func (m model) View() string {
 	var b strings.Builder
-	b.WriteString(titleStyle.Render(m.name))
+
+	header := renderHeader(m.name, m.startAt, m.now, m.width)
+	b.WriteString(header)
 	b.WriteString("\n")
 
 	for _, p := range m.panels {
 		body := fmt.Sprintf("%s\n\n%s",
-			panelTitleStyle.Render(p.Title()),
+			theme.PanelTitle.Render(p.Title()),
 			p.View(),
 		)
-		b.WriteString(panelStyle.Render(body))
+		b.WriteString(theme.PanelBorder.Render(body))
 		b.WriteString("\n")
 	}
 
-	b.WriteString(helpStyle.Render("press q or ctrl+c to quit"))
+	b.WriteString(theme.Help.Render("  q / ctrl-c / esc  quit"))
 	return b.String()
+}
+
+func renderHeader(name string, startAt, now time.Time, width int) string {
+	left := theme.Title.Render("▍ " + name)
+	uptime := now.Sub(startAt).Round(time.Second)
+	right := theme.Dim.Render(fmt.Sprintf("uptime %s  •  %s",
+		uptime, now.Format("15:04:05")))
+
+	// lipgloss.PlaceHorizontal handles the spacing; fall back to plain if width is 0.
+	if width <= 0 {
+		return left + "   " + right
+	}
+	gap := width - lipgloss.Width(left) - lipgloss.Width(right)
+	if gap < 1 {
+		gap = 1
+	}
+	return left + strings.Repeat(" ", gap) + right
 }

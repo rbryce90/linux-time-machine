@@ -6,18 +6,21 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"github.com/rbryce90/linux-time-machine/internal/tui"
+	"github.com/rbryce90/linux-time-machine/internal/tui/theme"
 )
 
 type panel struct {
-	store  Store
-	mu     sync.RWMutex
-	latest Sample
-	prev   Sample
+	store   Store
+	mu      sync.RWMutex
+	latest  Sample
+	prev    Sample
 	hasPrev bool
-	err    error
-	hasRow bool
-	history []float64 // last N CPU percentages for sparkline
+	err     error
+	hasRow  bool
+	history []float64
 	top     []ProcessSample
 }
 
@@ -61,10 +64,10 @@ func (p *panel) View() string {
 	defer p.mu.RUnlock()
 
 	if p.err != nil {
-		return fmt.Sprintf("error: %v", p.err)
+		return theme.Bad.Render(fmt.Sprintf("error: %v", p.err))
 	}
 	if !p.hasRow {
-		return "waiting for first sample…"
+		return theme.Dim.Render("waiting for first sample…")
 	}
 
 	s := p.latest
@@ -85,29 +88,77 @@ func (p *panel) View() string {
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "CPU   %5.1f%%  %s\n", s.CPUPct, bar(s.CPUPct, 30))
-	fmt.Fprintf(&b, "            %s  (last %ds)\n", sparkline(p.history), len(p.history))
-	fmt.Fprintf(&b, "MEM   %5.1f%%  %s  %s / %s\n",
-		memPct, bar(memPct, 30),
-		humanBytes(s.MemUsed), humanBytes(s.MemTotal))
-	fmt.Fprintf(&b, "DISK  read: %s/s  write: %s/s\n",
-		humanBytes(diskReadRate), humanBytes(diskWriteRate))
-	fmt.Fprintf(&b, "NET   rx:   %s/s  tx:    %s/s\n",
-		humanBytes(netRxRate), humanBytes(netTxRate))
+
+	// CPU row
+	b.WriteString(metricRow("CPU",
+		theme.ByPercentStyle(s.CPUPct).Render(fmt.Sprintf("%5.1f%%", s.CPUPct)),
+		coloredBar(s.CPUPct, 30),
+		""))
+	b.WriteString("\n")
+	// Sparkline on its own line, indented under CPU
+	b.WriteString(theme.Label.Render("      "))
+	b.WriteString(coloredSparkline(p.history))
+	b.WriteString(theme.Dim.Render(fmt.Sprintf("  last %ds\n", len(p.history))))
+
+	// MEM row
+	b.WriteString(metricRow("MEM",
+		theme.ByPercentStyle(memPct).Render(fmt.Sprintf("%5.1f%%", memPct)),
+		coloredBar(memPct, 30),
+		theme.Value.Render(fmt.Sprintf("%s / %s",
+			humanBytes(s.MemUsed), humanBytes(s.MemTotal)))))
+	b.WriteString("\n")
+
+	// DISK row
+	b.WriteString(theme.Label.Render("DISK  "))
+	b.WriteString(theme.Label.Render("read "))
+	b.WriteString(theme.Value.Render(humanBytes(diskReadRate)))
+	b.WriteString(theme.Dim.Render("/s   "))
+	b.WriteString(theme.Label.Render("write "))
+	b.WriteString(theme.Value.Render(humanBytes(diskWriteRate)))
+	b.WriteString(theme.Dim.Render("/s"))
+	b.WriteString("\n")
+
+	// NET row
+	b.WriteString(theme.Label.Render("NET   "))
+	b.WriteString(theme.Label.Render("rx "))
+	b.WriteString(theme.Value.Render(humanBytes(netRxRate)))
+	b.WriteString(theme.Dim.Render("/s   "))
+	b.WriteString(theme.Label.Render("tx "))
+	b.WriteString(theme.Value.Render(humanBytes(netTxRate)))
+	b.WriteString(theme.Dim.Render("/s"))
+	b.WriteString("\n")
+
 	if len(p.top) > 0 {
-		b.WriteString("\nTOP   PID     CPU%    MEM       NAME\n")
+		b.WriteString("\n")
+		b.WriteString(theme.TableHeader.Render(fmt.Sprintf("%-6s  %-6s  %-8s  %s",
+			"PID", "CPU%", "MEM", "PROCESS")))
+		b.WriteString("\n")
 		for _, pr := range p.top {
 			name := pr.Name
-			if len(name) > 32 {
-				name = name[:32]
+			if len(name) > 40 {
+				name = name[:40]
 			}
-			fmt.Fprintf(&b, "      %-6d  %5.1f   %-8s  %s\n",
-				pr.PID, pr.CPUPct, humanBytes(pr.MemRSS), name)
+			pid := theme.ByPercentStyle(0).Copy().Foreground(theme.Cyan).
+				Render(fmt.Sprintf("%-6d", pr.PID))
+			cpu := theme.ByPercentStyle(pr.CPUPct).Render(fmt.Sprintf("%5.1f ", pr.CPUPct))
+			mem := theme.Warn.Render(fmt.Sprintf("%-8s", humanBytes(pr.MemRSS)))
+			nm := theme.Value.Render(name)
+			fmt.Fprintf(&b, "%s  %s  %s  %s\n", pid, cpu, mem, nm)
 		}
 	}
 
-	fmt.Fprintf(&b, "\nat %s", s.At.Format("15:04:05"))
+	b.WriteString("\n")
+	b.WriteString(theme.Dim.Render("at " + s.At.Format("15:04:05")))
 	return b.String()
+}
+
+// metricRow renders: "LABEL  VALUE  BAR  EXTRA".
+func metricRow(label, value, bar, extra string) string {
+	out := theme.Label.Render(fmt.Sprintf("%-4s  ", label)) + value + "  " + bar
+	if extra != "" {
+		out += "  " + extra
+	}
+	return out
 }
 
 func perSec(cur, prev int64, seconds float64) int64 {
@@ -118,10 +169,23 @@ func perSec(cur, prev int64, seconds float64) int64 {
 	return int64(float64(diff) / seconds)
 }
 
+// coloredBar renders a percentage bar in a color that reflects its value.
+func coloredBar(pct float64, width int) string {
+	if pct < 0 {
+		pct = 0
+	}
+	if pct > 100 {
+		pct = 100
+	}
+	filled := int(pct / 100 * float64(width))
+	return theme.ByPercentStyle(pct).Render(strings.Repeat("█", filled)) +
+		theme.Label.Render(strings.Repeat("░", width-filled))
+}
+
 var sparkRunes = []rune(" ▁▂▃▄▅▆▇█")
 
-// sparkline renders a series of 0-100 percentages as unicode block chars.
-func sparkline(series []float64) string {
+// coloredSparkline renders per-character colors based on each sample's value.
+func coloredSparkline(series []float64) string {
 	if len(series) == 0 {
 		return ""
 	}
@@ -137,20 +201,10 @@ func sparkline(series []float64) string {
 		if idx >= len(sparkRunes) {
 			idx = len(sparkRunes) - 1
 		}
-		b.WriteRune(sparkRunes[idx])
+		style := lipgloss.NewStyle().Foreground(theme.ByPercent(v))
+		b.WriteString(style.Render(string(sparkRunes[idx])))
 	}
 	return b.String()
-}
-
-func bar(pct float64, width int) string {
-	if pct < 0 {
-		pct = 0
-	}
-	if pct > 100 {
-		pct = 100
-	}
-	filled := int(pct / 100 * float64(width))
-	return strings.Repeat("█", filled) + strings.Repeat("░", width-filled)
 }
 
 func humanBytes(n int64) string {
