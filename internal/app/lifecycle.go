@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"os/signal"
 	"syscall"
 
@@ -29,32 +30,44 @@ func New(cfg Config) (*App, error) {
 		Config:   cfg,
 		Registry: NewRegistry(),
 		DB:       db,
-		MCP:      mcp.NewServer(),
+		MCP:      mcp.NewServer(Name, "v0.0.1"),
 		TUI:      tui.NewApp(Name),
 	}, nil
 }
 
-// Run starts every registered domain and blocks until the process receives
-// SIGINT/SIGTERM, at which point domains are stopped in reverse order.
+// Run starts every registered domain, then either serves the MCP protocol
+// on stdio (ModeMCP) or runs the TUI (ModeTUI). Blocks until SIGINT/SIGTERM
+// or the other side (Claude Desktop / user) disconnects.
 func (a *App) Run(parent context.Context) error {
 	ctx, cancel := signal.NotifyContext(parent, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	deps := Deps{DB: a.DB.DB, MCP: a.MCP, TUI: a.TUI}
+	a.redirectLogsIfMCP()
 
+	deps := Deps{DB: a.DB.DB, MCP: a.MCP, TUI: a.TUI}
 	if err := a.Registry.StartAll(ctx, deps); err != nil {
 		return fmt.Errorf("registry start: %w", err)
 	}
-	log.Printf("%s: started domains=%v", Name, a.Registry.Names())
+	log.Printf("%s: started domains=%v mode=%v", Name, a.Registry.Names(), a.Config.Mode)
 
-	errCh := make(chan error, 2)
-	go func() { errCh <- a.MCP.Start(ctx) }()
-	go func() { errCh <- a.TUI.Run(ctx) }()
+	defer func() {
+		log.Printf("%s: shutting down", Name)
+		a.Registry.StopAll()
+		_ = a.DB.Close()
+	}()
 
-	<-ctx.Done()
-	log.Printf("%s: shutting down", Name)
+	switch a.Config.Mode {
+	case ModeMCP:
+		return a.MCP.ServeStdio(ctx)
+	default:
+		return a.TUI.Run(ctx)
+	}
+}
 
-	a.Registry.StopAll()
-	_ = a.DB.Close()
-	return nil
+// redirectLogsIfMCP keeps the log stream off stdout when MCP is using stdio,
+// since anything on stdout would corrupt the JSON-RPC frames.
+func (a *App) redirectLogsIfMCP() {
+	if a.Config.Mode == ModeMCP {
+		log.SetOutput(os.Stderr)
+	}
 }

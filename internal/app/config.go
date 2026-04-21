@@ -4,8 +4,16 @@ package app
 
 type Config struct {
 	DBPath  string        `json:"db_path"`
+	Mode    RunMode       `json:"-"` // set from flags, not file
 	Domains DomainToggles `json:"domains"`
 }
+
+type RunMode int
+
+const (
+	ModeTUI RunMode = iota // default: live TUI, human operator
+	ModeMCP                // serve MCP over stdio, for Claude Desktop
+)
 
 type DomainToggles struct {
 	System  DomainConfig `json:"system"`

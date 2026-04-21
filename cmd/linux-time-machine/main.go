@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"log"
 	"time"
 
@@ -10,11 +11,21 @@ import (
 )
 
 func main() {
+	mcpMode := flag.Bool("mcp", false, "run as MCP server on stdio (for Claude Desktop)")
+	dbPath := flag.String("db", "", "override default SQLite path")
+	flag.Parse()
+
 	cfg := app.DefaultConfig()
+	if *dbPath != "" {
+		cfg.DBPath = *dbPath
+	}
+	if *mcpMode {
+		cfg.Mode = app.ModeMCP
+	}
 
 	a, err := app.New(cfg)
 	if err != nil {
-		log.Fatalf("pulse: init: %v", err)
+		log.Fatalf("%s: init: %v", app.Name, err)
 	}
 
 	if cfg.Domains.System.Enabled {
@@ -26,6 +37,6 @@ func main() {
 	// Future: events and network domains register here behind their toggles.
 
 	if err := a.Run(context.Background()); err != nil {
-		log.Fatalf("pulse: run: %v", err)
+		log.Fatalf("%s: run: %v", app.Name, err)
 	}
 }
