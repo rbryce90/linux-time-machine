@@ -3,9 +3,11 @@ package app
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/rbryce90/linux-time-machine/internal/mcp"
@@ -42,7 +44,7 @@ func (a *App) Run(parent context.Context) error {
 	ctx, cancel := signal.NotifyContext(parent, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	a.redirectLogsIfMCP()
+	a.redirectLogs()
 
 	deps := Deps{DB: a.DB.DB, MCP: a.MCP, TUI: a.TUI}
 	if err := a.Registry.StartAll(ctx, deps); err != nil {
@@ -64,10 +66,22 @@ func (a *App) Run(parent context.Context) error {
 	}
 }
 
-// redirectLogsIfMCP keeps the log stream off stdout when MCP is using stdio,
-// since anything on stdout would corrupt the JSON-RPC frames.
-func (a *App) redirectLogsIfMCP() {
-	if a.Config.Mode == ModeMCP {
+// redirectLogs keeps the log stream out of the terminal.
+//   - ModeMCP: stdout is the JSON-RPC wire; logs go to stderr.
+//   - ModeTUI: bubbletea owns the terminal; logs go to <dir>/<Name>.log or,
+//     failing that, are silenced. We never write logs to stdout/stderr in
+//     TUI mode because that corrupts the rendered view.
+func (a *App) redirectLogs() {
+	switch a.Config.Mode {
+	case ModeMCP:
 		log.SetOutput(os.Stderr)
+	default:
+		logPath := filepath.Join(filepath.Dir(a.Config.DBPath), Name+".log")
+		f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			log.SetOutput(io.Discard)
+			return
+		}
+		log.SetOutput(f)
 	}
 }
