@@ -5,16 +5,18 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/rbryce90/linux-time-machine/internal/accessor/ollama"
 	"github.com/rbryce90/linux-time-machine/internal/mcp"
 	"github.com/rbryce90/linux-time-machine/internal/tui"
 )
 
 // Deps is the shared plumbing each domain may use. A domain that doesn't
-// need something simply ignores it.
+// need something simply ignores it. Ollama may be nil if unavailable.
 type Deps struct {
-	DB  *sql.DB
-	MCP *mcp.Server
-	TUI *tui.App
+	DB     *sql.DB
+	MCP    *mcp.Server
+	TUI    *tui.App
+	Ollama *ollama.Client
 }
 
 // Domain is the contract every domain implements. One folder under

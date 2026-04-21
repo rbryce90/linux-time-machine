@@ -9,7 +9,9 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
+	"github.com/rbryce90/linux-time-machine/internal/accessor/ollama"
 	"github.com/rbryce90/linux-time-machine/internal/mcp"
 	"github.com/rbryce90/linux-time-machine/internal/storage"
 	"github.com/rbryce90/linux-time-machine/internal/tui"
@@ -21,6 +23,7 @@ type App struct {
 	DB       *storage.SQLite
 	MCP      *mcp.Server
 	TUI      *tui.App
+	Ollama   *ollama.Client
 }
 
 func New(cfg Config) (*App, error) {
@@ -28,12 +31,14 @@ func New(cfg Config) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+	oll := ollama.New()
 	return &App{
 		Config:   cfg,
 		Registry: NewRegistry(),
 		DB:       db,
 		MCP:      mcp.NewServer(Name, "v0.0.1"),
 		TUI:      tui.NewApp(Name),
+		Ollama:   oll,
 	}, nil
 }
 
@@ -46,7 +51,17 @@ func (a *App) Run(parent context.Context) error {
 
 	a.redirectLogs()
 
-	deps := Deps{DB: a.DB.DB, MCP: a.MCP, TUI: a.TUI}
+	// Ping Ollama; if it's unreachable we still pass the client along
+	// (domains can feature-detect), but note it in the log.
+	pingCtx, pingCancel := context.WithTimeout(ctx, 2*time.Second)
+	if err := a.Ollama.Ping(pingCtx); err != nil {
+		log.Printf("%s: ollama unreachable (%v) — semantic features will be disabled", Name, err)
+	} else {
+		log.Printf("%s: ollama ready, embedding model=%s", Name, a.Ollama.EmbeddingModel())
+	}
+	pingCancel()
+
+	deps := Deps{DB: a.DB.DB, MCP: a.MCP, TUI: a.TUI, Ollama: a.Ollama}
 	if err := a.Registry.StartAll(ctx, deps); err != nil {
 		return fmt.Errorf("registry start: %w", err)
 	}

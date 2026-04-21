@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/rbryce90/linux-time-machine/internal/accessor/ollama"
 	"github.com/rbryce90/linux-time-machine/internal/app"
 )
 
@@ -15,6 +16,8 @@ type Domain struct {
 	cfg       Config
 	store     Store
 	collector *Collector
+	embedder  *embedder
+	ollama    *ollama.Client
 	cancel    context.CancelFunc
 }
 
@@ -31,6 +34,8 @@ func (d *Domain) Start(ctx context.Context, deps app.Deps) error {
 	}
 
 	d.collector = NewCollector(d.store)
+	d.ollama = deps.Ollama
+	d.embedder = newEmbedder(d.store, deps.Ollama)
 
 	if err := deps.MCP.RegisterProvider(d); err != nil {
 		return fmt.Errorf("events: mcp register: %w", err)
@@ -40,6 +45,7 @@ func (d *Domain) Start(ctx context.Context, deps app.Deps) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	d.cancel = cancel
 	go d.collector.Run(runCtx)
+	go d.embedder.run(runCtx)
 	return nil
 }
 
