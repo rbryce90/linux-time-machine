@@ -26,7 +26,10 @@ type panel struct {
 	cursor  *time.Time // nil -> live; non-nil -> history at this time
 }
 
-const sparklineLen = 60
+const (
+	sparklineLen = 60  // live-mode CPU rolling window (1 sample/s)
+	trendsWindow = 120 // seconds of history shown in the multi-metric trend block
+)
 
 func (p *panel) Title() string { return "System" }
 
@@ -110,7 +113,8 @@ func (p *panel) viewLive() string {
 		}
 	}
 
-	return renderBody(p.latest, rate, p.history, -1, p.top)
+	trends := p.loadTrends(p.latest.At)
+	return renderBody(p.latest, rate, p.history, -1, p.top, trends, -1)
 }
 
 // viewAt renders the panel at a specific historical timestamp.
@@ -150,16 +154,98 @@ func (p *panel) viewAt(at time.Time) string {
 
 	top, _ := p.store.TopProcessesAt(at, "cpu", 5)
 
-	return renderBody(sample, rate, history, cursorIdx, top)
+	trends := p.loadTrends(sample.At)
+	// Locate the cursor in the trends window (last valid sample index).
+	trendsCursor := len(trends.cpu) - 1
+
+	return renderBody(sample, rate, history, cursorIdx, top, trends, trendsCursor)
+}
+
+// loadTrends loads a multi-metric time-series ending at `endAt` and computes
+// normalized per-metric series suitable for sparkline rendering.
+func (p *panel) loadTrends(endAt time.Time) trendSet {
+	start := endAt.Add(-time.Duration(trendsWindow) * time.Second)
+	samples, err := p.store.SamplesInRange(start, endAt)
+	if err != nil || len(samples) < 2 {
+		return trendSet{}
+	}
+
+	ts := trendSet{
+		cpu: make([]float64, 0, len(samples)),
+		mem: make([]float64, 0, len(samples)),
+	}
+	diskRates := make([]float64, 0, len(samples))
+	netRates := make([]float64, 0, len(samples))
+
+	for i, s := range samples {
+		ts.cpu = append(ts.cpu, s.CPUPct)
+		mp := 0.0
+		if s.MemTotal > 0 {
+			mp = float64(s.MemUsed) / float64(s.MemTotal) * 100
+		}
+		ts.mem = append(ts.mem, mp)
+
+		if i == 0 {
+			diskRates = append(diskRates, 0)
+			netRates = append(netRates, 0)
+			continue
+		}
+		prev := samples[i-1]
+		elapsed := s.At.Sub(prev.At).Seconds()
+		if elapsed <= 0 {
+			diskRates = append(diskRates, 0)
+			netRates = append(netRates, 0)
+			continue
+		}
+		dTotal := float64(perSec(s.DiskRead, prev.DiskRead, elapsed)) +
+			float64(perSec(s.DiskWrite, prev.DiskWrite, elapsed))
+		nTotal := float64(perSec(s.NetRx, prev.NetRx, elapsed)) +
+			float64(perSec(s.NetTx, prev.NetTx, elapsed))
+		diskRates = append(diskRates, dTotal)
+		netRates = append(netRates, nTotal)
+	}
+
+	ts.disk, ts.diskPeak = normalizePct(diskRates)
+	ts.net, ts.netPeak = normalizePct(netRates)
+	return ts
+}
+
+type trendSet struct {
+	cpu, mem, disk, net []float64
+	diskPeak, netPeak   float64 // raw bytes/s at the peak, for label
+}
+
+// normalizePct scales a raw series to 0-100 relative to its own max.
+// Returns the scaled series plus the raw peak (for display).
+func normalizePct(series []float64) ([]float64, float64) {
+	if len(series) == 0 {
+		return nil, 0
+	}
+	peak := 0.0
+	for _, v := range series {
+		if v > peak {
+			peak = v
+		}
+	}
+	if peak <= 0 {
+		return make([]float64, len(series)), 0
+	}
+	out := make([]float64, len(series))
+	for i, v := range series {
+		out[i] = v / peak * 100
+	}
+	return out, peak
 }
 
 type rateSet struct {
 	diskRead, diskWrite, netRx, netTx int64
 }
 
-// renderBody is the shared render for both live and history modes. cursorIdx
-// marks which sparkline character is "now" (for history). Pass -1 to skip.
-func renderBody(s Sample, rate rateSet, history []float64, cursorIdx int, top []ProcessSample) string {
+// renderBody is the shared render for both live and history modes.
+// cursorIdx marks the CPU sparkline cursor position (history mode).
+// trendsCursor marks the same inside the multi-metric trends block.
+// Pass -1 for either to skip the marker.
+func renderBody(s Sample, rate rateSet, history []float64, cursorIdx int, top []ProcessSample, trends trendSet, trendsCursor int) string {
 	memPct := 0.0
 	if s.MemTotal > 0 {
 		memPct = float64(s.MemUsed) / float64(s.MemTotal) * 100
@@ -199,6 +285,23 @@ func renderBody(s Sample, rate rateSet, history []float64, cursorIdx int, top []
 	b.WriteString(theme.Value.Render(humanBytes(rate.netTx)))
 	b.WriteString(theme.Dim.Render("/s\n"))
 
+	// Multi-metric trend block
+	if len(trends.cpu) >= 2 {
+		b.WriteString("\n")
+		b.WriteString(theme.TableHeader.Render(fmt.Sprintf("LAST %ds", len(trends.cpu))))
+		b.WriteString("\n")
+		b.WriteString(trendLine("CPU ", trends.cpu, trendsCursor, ""))
+		b.WriteString("\n")
+		b.WriteString(trendLine("MEM ", trends.mem, trendsCursor, ""))
+		b.WriteString("\n")
+		b.WriteString(trendLine("DISK", trends.disk, trendsCursor,
+			peakSuffix(trends.diskPeak)))
+		b.WriteString("\n")
+		b.WriteString(trendLine("NET ", trends.net, trendsCursor,
+			peakSuffix(trends.netPeak)))
+		b.WriteString("\n")
+	}
+
 	if len(top) > 0 {
 		b.WriteString("\n")
 		b.WriteString(theme.TableHeader.Render(fmt.Sprintf("%-6s  %-6s  %-8s  %s",
@@ -220,6 +323,25 @@ func renderBody(s Sample, rate rateSet, history []float64, cursorIdx int, top []
 	b.WriteString("\n")
 	b.WriteString(theme.Dim.Render("at " + s.At.Format("15:04:05")))
 	return b.String()
+}
+
+// trendLine renders one labeled sparkline row in the trends block.
+func trendLine(label string, series []float64, cursorIdx int, suffix string) string {
+	var b strings.Builder
+	b.WriteString(theme.Label.Render(fmt.Sprintf("%-4s  ", label)))
+	b.WriteString(coloredSparkline(series, cursorIdx))
+	if suffix != "" {
+		b.WriteString("  ")
+		b.WriteString(theme.Dim.Render(suffix))
+	}
+	return b.String()
+}
+
+func peakSuffix(peak float64) string {
+	if peak <= 0 {
+		return ""
+	}
+	return "peak " + humanBytes(int64(peak)) + "/s"
 }
 
 func metricRow(label, value, bar, extra string) string {
