@@ -23,13 +23,23 @@ type Sample struct {
 	NetTx     int64
 }
 
+type ProcessSample struct {
+	At     time.Time
+	PID    int32
+	Name   string
+	CPUPct float64
+	MemRSS int64
+}
+
 // Store is the storage contract for this domain. Collector writes; tools
 // and panel read. A fake can be substituted for tests.
 type Store interface {
 	EnsureSchema() error
 	WriteSample(Sample) error
+	WriteProcesses([]ProcessSample) error
 	LatestSample() (Sample, error)
 	SamplesInRange(start, end time.Time) ([]Sample, error)
+	TopProcessesRecent(metric string, limit int) ([]ProcessSample, error)
 	ProcessAt(pid types.ProcessID, at time.Time) (ProcessInfo, error)
 }
 
@@ -98,6 +108,64 @@ func (s *sqliteStore) SamplesInRange(start, end time.Time) ([]Sample, error) {
 			return nil, err
 		}
 		out = append(out, sample)
+	}
+	return out, rows.Err()
+}
+
+func (s *sqliteStore) WriteProcesses(ps []ProcessSample) error {
+	if len(ps) == 0 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("tx begin: %w", err)
+	}
+	stmt, err := tx.Prepare(
+		`INSERT INTO system_processes (ts, pid, name, cpu_pct, mem_rss)
+		 VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT(ts, pid) DO NOTHING`)
+	if err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("tx prepare: %w", err)
+	}
+	defer stmt.Close()
+	for _, p := range ps {
+		if _, err := stmt.Exec(p.At.UnixNano(), p.PID, p.Name, p.CPUPct, p.MemRSS); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("tx exec: %w", err)
+		}
+	}
+	return tx.Commit()
+}
+
+// TopProcessesRecent returns the N processes with the highest metric from
+// the most recent batch written. metric is "cpu" or "mem".
+func (s *sqliteStore) TopProcessesRecent(metric string, limit int) ([]ProcessSample, error) {
+	orderCol := "cpu_pct"
+	if metric == "mem" {
+		orderCol = "mem_rss"
+	}
+	q := fmt.Sprintf(
+		`SELECT ts, pid, name, cpu_pct, mem_rss
+		   FROM system_processes
+		  WHERE ts = (SELECT MAX(ts) FROM system_processes)
+		  ORDER BY %s DESC
+		  LIMIT ?`, orderCol)
+	rows, err := s.db.Query(q, limit)
+	if err != nil {
+		return nil, fmt.Errorf("top processes: %w", err)
+	}
+	defer rows.Close()
+
+	var out []ProcessSample
+	for rows.Next() {
+		var ts int64
+		var p ProcessSample
+		if err := rows.Scan(&ts, &p.PID, &p.Name, &p.CPUPct, &p.MemRSS); err != nil {
+			return nil, fmt.Errorf("scan process: %w", err)
+		}
+		p.At = time.Unix(0, ts)
+		out = append(out, p)
 	}
 	return out, rows.Err()
 }

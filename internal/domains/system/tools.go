@@ -85,9 +85,39 @@ func intArg(args map[string]any, key string, def int) int {
 	return def
 }
 
+type topProcesses struct{ store Store }
+
+func (t *topProcesses) Name() string { return "system_top_processes" }
+func (t *topProcesses) Description() string {
+	return "Return the processes currently using the most CPU or memory. Args: metric (\"cpu\" or \"mem\", default \"cpu\"), limit (int, default 10)."
+}
+func (t *topProcesses) Invoke(_ context.Context, args map[string]any) (any, error) {
+	metric := "cpu"
+	if v, ok := args["metric"].(string); ok && v != "" {
+		metric = v
+	}
+	limit := intArg(args, "limit", 10)
+	ps, err := t.store.TopProcessesRecent(metric, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]map[string]any, 0, len(ps))
+	for _, p := range ps {
+		out = append(out, map[string]any{
+			"pid":     p.PID,
+			"name":    p.Name,
+			"cpu_pct": p.CPUPct,
+			"mem_rss": p.MemRSS,
+			"at":      p.At.Format(time.RFC3339Nano),
+		})
+	}
+	return map[string]any{"metric": metric, "count": len(out), "processes": out}, nil
+}
+
 func (d *Domain) Tools() []mcp.Tool {
 	return []mcp.Tool{
 		&getCurrentMetrics{store: d.store},
 		&getMetricsHistory{store: d.store},
+		&topProcesses{store: d.store},
 	}
 }
