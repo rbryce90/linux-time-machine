@@ -18,19 +18,22 @@ type Client struct {
 	baseURL        string
 	http           *http.Client
 	embeddingModel string
+	chatModel      string
 }
 
 type Option func(*Client)
 
 func WithBaseURL(u string) Option          { return func(c *Client) { c.baseURL = u } }
 func WithEmbeddingModel(m string) Option   { return func(c *Client) { c.embeddingModel = m } }
+func WithChatModel(m string) Option        { return func(c *Client) { c.chatModel = m } }
 func WithHTTPClient(h *http.Client) Option { return func(c *Client) { c.http = h } }
 
 func New(opts ...Option) *Client {
 	c := &Client{
 		baseURL:        DefaultBaseURL,
-		http:           &http.Client{Timeout: 30 * time.Second},
+		http:           &http.Client{Timeout: 120 * time.Second},
 		embeddingModel: "nomic-embed-text",
+		chatModel:      "llama3.1:8b",
 	}
 	for _, o := range opts {
 		o(c)
@@ -39,6 +42,7 @@ func New(opts ...Option) *Client {
 }
 
 func (c *Client) EmbeddingModel() string { return c.embeddingModel }
+func (c *Client) ChatModel() string      { return c.chatModel }
 
 // Ping returns nil if the server responds to /api/version.
 func (c *Client) Ping(ctx context.Context) error {
