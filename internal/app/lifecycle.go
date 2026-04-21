@@ -8,10 +8,12 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/rbryce90/linux-time-machine/internal/accessor/ollama"
+	"github.com/rbryce90/linux-time-machine/internal/agent"
 	"github.com/rbryce90/linux-time-machine/internal/mcp"
 	"github.com/rbryce90/linux-time-machine/internal/storage"
 	"github.com/rbryce90/linux-time-machine/internal/tui"
@@ -54,18 +56,25 @@ func (a *App) Run(parent context.Context) error {
 	// Ping Ollama; if it's unreachable we still pass the client along
 	// (domains can feature-detect), but note it in the log.
 	pingCtx, pingCancel := context.WithTimeout(ctx, 2*time.Second)
-	if err := a.Ollama.Ping(pingCtx); err != nil {
-		log.Printf("%s: ollama unreachable (%v) — semantic features will be disabled", Name, err)
+	ollamaErr := a.Ollama.Ping(pingCtx)
+	pingCancel()
+	if ollamaErr != nil {
+		log.Printf("%s: ollama unreachable (%v) — semantic features will be disabled", Name, ollamaErr)
 	} else {
 		log.Printf("%s: ollama ready, embedding model=%s", Name, a.Ollama.EmbeddingModel())
 	}
-	pingCancel()
 
 	deps := Deps{DB: a.DB.DB, MCP: a.MCP, TUI: a.TUI, Ollama: a.Ollama}
 	if err := a.Registry.StartAll(ctx, deps); err != nil {
 		return fmt.Errorf("registry start: %w", err)
 	}
 	log.Printf("%s: started domains=%v mode=%v", Name, a.Registry.Names(), a.Config.Mode)
+
+	// Wire the chat agent only in TUI mode — MCP mode has no human UI.
+	// The agent must be built AFTER domains register their MCP tools.
+	if a.Config.Mode == ModeTUI {
+		a.wireChatAgent(ollamaErr)
+	}
 
 	defer func() {
 		log.Printf("%s: shutting down", Name)
@@ -79,6 +88,25 @@ func (a *App) Run(parent context.Context) error {
 	default:
 		return a.TUI.Run(ctx)
 	}
+}
+
+// wireChatAgent builds the tool-calling agent from the registered MCP tools
+// and hands it to the TUI. If the startup Ollama ping failed we pass a
+// disabled reason so the chat panel renders a useful message on first open
+// rather than crashing when the user hits `c`.
+func (a *App) wireChatAgent(ollamaErr error) {
+	if ollamaErr != nil {
+		a.TUI.SetAgent(nil, fmt.Sprintf("Ollama is not reachable at %s — start `ollama serve` and restart this app",
+			strings.TrimPrefix(ollama.DefaultBaseURL, "http://")))
+		return
+	}
+	tools, invoker := agent.FromMCPTools(a.MCP)
+	a.TUI.SetAgent(&agent.Agent{
+		Provider: a.Ollama,
+		Tools:    tools,
+		Invoker:  invoker,
+		MaxTurns: 6,
+	}, "")
 }
 
 // redirectLogs keeps the log stream out of the terminal.
