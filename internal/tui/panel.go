@@ -6,8 +6,9 @@ import "time"
 
 type Panel interface {
 	Title() string
-	Refresh()                 // called on each live-mode tick
-	SetCursor(at *time.Time)  // nil = live mode; non-nil = historical view at this time
+	Refresh()                  // called on each live-mode tick
+	SetCursor(at *time.Time)   // nil = live mode; non-nil = historical view at this time
+	SetSize(width, height int) // called on terminal resize so the panel can adapt layout
 	View() string
 }
 

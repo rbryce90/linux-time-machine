@@ -24,6 +24,7 @@ type panel struct {
 	history []float64 // live-mode rolling window of CPU percentages
 	top     []ProcessSample
 	cursor  *time.Time // nil -> live; non-nil -> history at this time
+	width   int        // inner panel width (set via SetSize)
 }
 
 const (
@@ -79,6 +80,52 @@ func (p *panel) SetCursor(at *time.Time) {
 	p.cursor = at
 }
 
+func (p *panel) SetSize(width, _ int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.width = width
+}
+
+// sparkWidth returns how many chars of sparkline we should render given the
+// panel's inner width. The trend block uses a 4-char label + "  " gap + an
+// optional " peak XX.XX YB/s" suffix (~18 chars). Keep a small guard so
+// things don't collapse to zero on tiny terminals.
+func (p *panel) sparkWidth(hasSuffix bool) int {
+	w := p.width
+	if w <= 0 {
+		w = 80
+	}
+	used := 6 // label + spacer
+	if hasSuffix {
+		used += 20
+	}
+	spark := w - used
+	if spark < 10 {
+		spark = 10
+	}
+	return spark
+}
+
+// barWidth returns the width of the percentage bars in the snapshot rows.
+// Leaves room for label, percentage, and optional MEM suffix.
+func (p *panel) barWidth() int {
+	w := p.width
+	if w <= 0 {
+		w = 80
+	}
+	// Rough layout: "CPU  XX.X%  [bar]  memSuffix"
+	reserved := 8 + 7 + 4 + 28
+	avail := w - reserved
+	switch {
+	case avail >= 40:
+		return 40
+	case avail >= 20:
+		return avail
+	default:
+		return 20
+	}
+}
+
 func (p *panel) View() string {
 	p.mu.RLock()
 	cursor := p.cursor
@@ -114,7 +161,7 @@ func (p *panel) viewLive() string {
 	}
 
 	trends := p.loadTrends(p.latest.At)
-	return renderBody(p.latest, rate, p.history, -1, p.top, trends, -1)
+	return renderBody(p.latest, rate, p.history, -1, p.top, trends, -1, p.barWidth())
 }
 
 // viewAt renders the panel at a specific historical timestamp.
@@ -158,13 +205,20 @@ func (p *panel) viewAt(at time.Time) string {
 	// Locate the cursor in the trends window (last valid sample index).
 	trendsCursor := len(trends.cpu) - 1
 
-	return renderBody(sample, rate, history, cursorIdx, top, trends, trendsCursor)
+	return renderBody(sample, rate, history, cursorIdx, top, trends, trendsCursor, p.barWidth())
 }
 
 // loadTrends loads a multi-metric time-series ending at `endAt` and computes
-// normalized per-metric series suitable for sparkline rendering.
+// normalized per-metric series suitable for sparkline rendering. The window
+// length adapts to the panel's current width so sparklines don't overflow.
 func (p *panel) loadTrends(endAt time.Time) trendSet {
-	start := endAt.Add(-time.Duration(trendsWindow) * time.Second)
+	// Make the trends window match what will actually fit. Worst case
+	// (DISK/NET) uses the suffix, so reserve for that.
+	seconds := p.sparkWidth(true)
+	if seconds > trendsWindow {
+		seconds = trendsWindow
+	}
+	start := endAt.Add(-time.Duration(seconds) * time.Second)
 	samples, err := p.store.SamplesInRange(start, endAt)
 	if err != nil || len(samples) < 2 {
 		return trendSet{}
@@ -245,7 +299,7 @@ type rateSet struct {
 // cursorIdx marks the CPU sparkline cursor position (history mode).
 // trendsCursor marks the same inside the multi-metric trends block.
 // Pass -1 for either to skip the marker.
-func renderBody(s Sample, rate rateSet, history []float64, cursorIdx int, top []ProcessSample, trends trendSet, trendsCursor int) string {
+func renderBody(s Sample, rate rateSet, history []float64, cursorIdx int, top []ProcessSample, trends trendSet, trendsCursor int, barW int) string {
 	memPct := 0.0
 	if s.MemTotal > 0 {
 		memPct = float64(s.MemUsed) / float64(s.MemTotal) * 100
@@ -253,18 +307,18 @@ func renderBody(s Sample, rate rateSet, history []float64, cursorIdx int, top []
 
 	var b strings.Builder
 
+	_ = history
+	_ = cursorIdx
+
 	b.WriteString(metricRow("CPU",
 		theme.ByPercentStyle(s.CPUPct).Render(fmt.Sprintf("%5.1f%%", s.CPUPct)),
-		coloredBar(s.CPUPct, 30),
+		coloredBar(s.CPUPct, barW),
 		""))
 	b.WriteString("\n")
-	b.WriteString(theme.Label.Render("      "))
-	b.WriteString(coloredSparkline(history, cursorIdx))
-	b.WriteString(theme.Dim.Render(fmt.Sprintf("  last %ds\n", len(history))))
 
 	b.WriteString(metricRow("MEM",
 		theme.ByPercentStyle(memPct).Render(fmt.Sprintf("%5.1f%%", memPct)),
-		coloredBar(memPct, 30),
+		coloredBar(memPct, barW),
 		theme.Value.Render(fmt.Sprintf("%s / %s",
 			humanBytes(s.MemUsed), humanBytes(s.MemTotal)))))
 	b.WriteString("\n")

@@ -84,6 +84,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleKey(msg)
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		// Account for the panel border (2 chars) and padding (2 chars).
+		innerWidth := msg.Width - 4
+		if innerWidth < 10 {
+			innerWidth = 10
+		}
+		for _, p := range m.panels {
+			p.SetSize(innerWidth, msg.Height)
+		}
 	case tickMsg:
 		m.now = time.Time(msg)
 		if m.mode == modeLive {
