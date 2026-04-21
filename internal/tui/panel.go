@@ -2,9 +2,12 @@
 // package handles the bubbletea program, periodic refresh, and layout.
 package tui
 
+import "time"
+
 type Panel interface {
 	Title() string
-	Refresh() // called on each tick; panel re-reads its data source
+	Refresh()                 // called on each live-mode tick
+	SetCursor(at *time.Time)  // nil = live mode; non-nil = historical view at this time
 	View() string
 }
 

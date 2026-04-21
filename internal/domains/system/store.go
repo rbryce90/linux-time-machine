@@ -38,8 +38,11 @@ type Store interface {
 	WriteSample(Sample) error
 	WriteProcesses([]ProcessSample) error
 	LatestSample() (Sample, error)
+	SampleAt(at time.Time) (Sample, error) // most recent sample at or before `at`
 	SamplesInRange(start, end time.Time) ([]Sample, error)
 	TopProcessesRecent(metric string, limit int) ([]ProcessSample, error)
+	TopProcessesAt(at time.Time, metric string, limit int) ([]ProcessSample, error)
+	TimeBounds() (min, max time.Time, err error)
 	ProcessAt(pid types.ProcessID, at time.Time) (ProcessInfo, error)
 }
 
@@ -138,6 +141,47 @@ func (s *sqliteStore) WriteProcesses(ps []ProcessSample) error {
 	return tx.Commit()
 }
 
+// SampleAt returns the most recent sample at or before the given time.
+// Useful for history scrubbing when the cursor falls between sampling ticks.
+func (s *sqliteStore) SampleAt(at time.Time) (Sample, error) {
+	row := s.db.QueryRow(
+		`SELECT ts, cpu_pct, mem_used, mem_total, disk_read, disk_write, net_rx, net_tx
+		   FROM system_samples
+		  WHERE ts <= ?
+		  ORDER BY ts DESC
+		  LIMIT 1`, at.UnixNano())
+	return scanSample(row)
+}
+
+func (s *sqliteStore) TimeBounds() (time.Time, time.Time, error) {
+	var minTS, maxTS sql.NullInt64
+	err := s.db.QueryRow(
+		`SELECT MIN(ts), MAX(ts) FROM system_samples`).Scan(&minTS, &maxTS)
+	if err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("time bounds: %w", err)
+	}
+	if !minTS.Valid || !maxTS.Valid {
+		return time.Time{}, time.Time{}, sql.ErrNoRows
+	}
+	return time.Unix(0, minTS.Int64), time.Unix(0, maxTS.Int64), nil
+}
+
+// TopProcessesAt returns top processes from the sample batch closest to `at`
+// (most recent batch at or before the given time).
+func (s *sqliteStore) TopProcessesAt(at time.Time, metric string, limit int) ([]ProcessSample, error) {
+	orderCol := "cpu_pct"
+	if metric == "mem" {
+		orderCol = "mem_rss"
+	}
+	q := fmt.Sprintf(
+		`SELECT ts, pid, name, cpu_pct, mem_rss
+		   FROM system_processes
+		  WHERE ts = (SELECT MAX(ts) FROM system_processes WHERE ts <= ?)
+		  ORDER BY %s DESC
+		  LIMIT ?`, orderCol)
+	return scanProcesses(s.db.Query(q, at.UnixNano(), limit))
+}
+
 // TopProcessesRecent returns the N processes with the highest metric from
 // the most recent batch written. metric is "cpu" or "mem".
 func (s *sqliteStore) TopProcessesRecent(metric string, limit int) ([]ProcessSample, error) {
@@ -151,9 +195,12 @@ func (s *sqliteStore) TopProcessesRecent(metric string, limit int) ([]ProcessSam
 		  WHERE ts = (SELECT MAX(ts) FROM system_processes)
 		  ORDER BY %s DESC
 		  LIMIT ?`, orderCol)
-	rows, err := s.db.Query(q, limit)
-	if err != nil {
-		return nil, fmt.Errorf("top processes: %w", err)
+	return scanProcesses(s.db.Query(q, limit))
+}
+
+func scanProcesses(rows *sql.Rows, rowsErr error) ([]ProcessSample, error) {
+	if rowsErr != nil {
+		return nil, fmt.Errorf("query processes: %w", rowsErr)
 	}
 	defer rows.Close()
 
