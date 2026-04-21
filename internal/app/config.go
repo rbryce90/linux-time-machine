@@ -31,7 +31,7 @@ func DefaultConfig() Config {
 		DBPath: "./" + Name + ".db",
 		Domains: DomainToggles{
 			System:  DomainConfig{Enabled: true, SampleInterval: 1},
-			Events:  DomainConfig{Enabled: false, SampleInterval: 0},
+			Events:  DomainConfig{Enabled: true, SampleInterval: 0},
 			Network: DomainConfig{Enabled: false, SampleInterval: 2},
 		},
 	}

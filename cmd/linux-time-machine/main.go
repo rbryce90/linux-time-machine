@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/rbryce90/linux-time-machine/internal/app"
+	"github.com/rbryce90/linux-time-machine/internal/domains/events"
 	"github.com/rbryce90/linux-time-machine/internal/domains/system"
 )
 
@@ -34,7 +35,11 @@ func main() {
 		}))
 	}
 
-	// Future: events and network domains register here behind their toggles.
+	if cfg.Domains.Events.Enabled {
+		a.Registry.Register(events.New(events.Config{}))
+	}
+
+	// Future: network domain registers here behind its toggle.
 
 	if err := a.Run(context.Background()); err != nil {
 		log.Fatalf("%s: run: %v", app.Name, err)
