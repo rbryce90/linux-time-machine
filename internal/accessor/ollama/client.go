@@ -29,9 +29,18 @@ func WithChatModel(m string) Option        { return func(c *Client) { c.chatMode
 func WithHTTPClient(h *http.Client) Option { return func(c *Client) { c.http = h } }
 
 func New(opts ...Option) *Client {
+	// Localhost, possibly many concurrent callers (embedder + chat + ping).
+	// Default MaxIdleConnsPerHost of 2 thrashes under load; disable gzip
+	// since it's localhost. Request deadlines come from callers' ctx.
+	transport := &http.Transport{
+		MaxIdleConns:        32,
+		MaxIdleConnsPerHost: 16,
+		IdleConnTimeout:     90 * time.Second,
+		DisableCompression:  true,
+	}
 	c := &Client{
 		baseURL:        DefaultBaseURL,
-		http:           &http.Client{Timeout: 120 * time.Second},
+		http:           &http.Client{Transport: transport},
 		embeddingModel: "nomic-embed-text",
 		chatModel:      "llama3.1:8b",
 	}
@@ -42,7 +51,6 @@ func New(opts ...Option) *Client {
 }
 
 func (c *Client) EmbeddingModel() string { return c.embeddingModel }
-func (c *Client) ChatModel() string      { return c.chatModel }
 
 // Ping returns nil if the server responds to /api/version.
 func (c *Client) Ping(ctx context.Context) error {
@@ -58,6 +66,47 @@ func (c *Client) Ping(ctx context.Context) error {
 	return nil
 }
 
+// postJSON is the shared request pipeline for the JSON endpoints on /api/*.
+// The body-read-on-error branch lets callers see the server's message
+// instead of just a status code.
+func (c *Client) postJSON(ctx context.Context, path string, in, out any) error {
+	body, err := json.Marshal(in)
+	if err != nil {
+		return fmt.Errorf("marshal: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("status %s: %s", resp.Status, string(b))
+	}
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("read body: %w", err)
+	}
+	if err := json.Unmarshal(b, out); err != nil {
+		return fmt.Errorf("decode: %w (body: %s)", err, truncate(string(b), 500))
+	}
+	return nil
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
+}
+
 type embedRequest struct {
 	Model  string `json:"model"`
 	Prompt string `json:"prompt"`
@@ -67,31 +116,11 @@ type embedResponse struct {
 	Embedding []float32 `json:"embedding"`
 }
 
-// Embed returns the embedding vector for the given text, using the
-// configured embedding model.
 func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {
-	body, err := json.Marshal(embedRequest{Model: c.embeddingModel, Prompt: text})
-	if err != nil {
-		return nil, err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/embeddings", bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("ollama embed: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("ollama embed: status %s: %s", resp.Status, string(b))
-	}
 	var er embedResponse
-	if err := json.NewDecoder(resp.Body).Decode(&er); err != nil {
-		return nil, fmt.Errorf("ollama embed: decode: %w", err)
+	if err := c.postJSON(ctx, "/api/embeddings",
+		embedRequest{Model: c.embeddingModel, Prompt: text}, &er); err != nil {
+		return nil, fmt.Errorf("ollama embed: %w", err)
 	}
 	if len(er.Embedding) == 0 {
 		return nil, fmt.Errorf("ollama embed: empty embedding")

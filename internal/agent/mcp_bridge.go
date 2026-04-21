@@ -10,9 +10,9 @@ import (
 )
 
 // FromMCPTools wraps the MCP server's registered tools as llm.Tools plus an
-// invoker that dispatches by name. No schema info yet — LLMs degrade to
-// "object with arbitrary properties," which is good enough for our current
-// tool set.
+// invoker that dispatches by name. Schemas come from each mcp.Tool.Schema();
+// passing them through gives local models real typed parameter info
+// (otherwise 3B/8B models hallucinate argument names).
 func FromMCPTools(server *mcp.Server) (tools []llm.Tool, invoker ToolInvoker) {
 	registered := server.Tools()
 	byName := make(map[string]mcp.Tool, len(registered))
@@ -23,13 +23,7 @@ func FromMCPTools(server *mcp.Server) (tools []llm.Tool, invoker ToolInvoker) {
 		tools = append(tools, llm.Tool{
 			Name:        t.Name(),
 			Description: t.Description(),
-			// Generic schema — LLMs can send any args map. Individual tools
-			// validate what they need via intArg/stringArg helpers.
-			Schema: map[string]any{
-				"type":                 "object",
-				"properties":           map[string]any{},
-				"additionalProperties": true,
-			},
+			Schema:      t.Schema(),
 		})
 	}
 

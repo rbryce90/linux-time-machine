@@ -5,10 +5,11 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"sync"
 
 	"github.com/rbryce90/linux-time-machine/internal/llm"
+	"golang.org/x/sync/errgroup"
 )
 
 // ToolInvoker executes one tool call and returns its result as a string
@@ -23,7 +24,6 @@ type Agent struct {
 	SystemPrompt string
 }
 
-// Event is emitted during Run so callers (e.g. TUI) can show progress.
 type Event struct {
 	Kind       EventKind
 	Content    string
@@ -36,32 +36,33 @@ type Event struct {
 type EventKind int
 
 const (
-	EventTurn EventKind = iota
-	EventToolCall
-	EventToolResult
-	EventAnswer
-	EventError
+	EventTurn       EventKind = iota
+	EventToolCall             // model requested a tool invocation
+	EventToolResult           // tool invocation returned successfully
+	EventToolError            // tool invocation failed (loop continues; result fed back to model as {"error": ...})
+	EventAnswer               // final assistant content
+	EventError                // fatal: provider.Chat failed or max turns exceeded
 )
 
-// Run executes the agent loop. `onEvent` may be nil. Returns the final
+// Run executes the agent loop. onEvent may be nil. Returns the final
 // assistant content or an error.
 func (a *Agent) Run(ctx context.Context, userInput string, onEvent func(Event)) (string, error) {
-	if a.MaxTurns <= 0 {
-		a.MaxTurns = 6
+	maxTurns := a.MaxTurns
+	if maxTurns <= 0 {
+		maxTurns = 6
 	}
-	emit := func(e Event) {
-		if onEvent != nil {
-			onEvent(e)
-		}
+	emit := onEvent
+	if emit == nil {
+		emit = func(Event) {}
 	}
 
-	messages := []llm.Message{}
+	messages := make([]llm.Message, 0, 2+maxTurns*3)
 	if a.SystemPrompt != "" {
 		messages = append(messages, llm.Message{Role: llm.RoleSystem, Content: a.SystemPrompt})
 	}
 	messages = append(messages, llm.Message{Role: llm.RoleUser, Content: userInput})
 
-	for turn := 0; turn < a.MaxTurns; turn++ {
+	for turn := 0; turn < maxTurns; turn++ {
 		emit(Event{Kind: EventTurn, Content: fmt.Sprintf("turn %d", turn+1)})
 
 		resp, err := a.Provider.Chat(ctx, messages, a.Tools)
@@ -76,41 +77,59 @@ func (a *Agent) Run(ctx context.Context, userInput string, onEvent func(Event)) 
 			return resp.Content, nil
 		}
 
-		// Model wants to call tools. Record assistant turn first.
+		// Record the assistant turn before invoking tools so the message
+		// order seen by the next model call is correct.
 		messages = append(messages, llm.Message{
 			Role:      llm.RoleAssistant,
 			Content:   resp.Content,
 			ToolCalls: resp.ToolCalls,
 		})
 
-		for _, tc := range resp.ToolCalls {
-			emit(Event{Kind: EventToolCall, ToolName: tc.Name, ToolArgs: tc.Arguments})
-
-			result, err := a.Invoker(ctx, tc.Name, tc.Arguments)
-			if err != nil {
-				result = fmt.Sprintf(`{"error": %q}`, err.Error())
-				emit(Event{Kind: EventError, Err: err, ToolName: tc.Name})
-			} else {
-				emit(Event{Kind: EventToolResult, ToolName: tc.Name, ToolResult: result})
-			}
-
+		results := a.invokeParallel(ctx, resp.ToolCalls, emit)
+		for i, r := range results {
 			messages = append(messages, llm.Message{
 				Role:       llm.RoleTool,
-				Content:    result,
-				ToolCallID: tc.ID,
-				ToolName:   tc.Name,
+				Content:    r,
+				ToolCallID: resp.ToolCalls[i].ID,
+				ToolName:   resp.ToolCalls[i].Name,
 			})
 		}
 	}
 
-	return "", fmt.Errorf("agent: exceeded max turns (%d)", a.MaxTurns)
+	err := fmt.Errorf("agent: exceeded max turns (%d)", maxTurns)
+	emit(Event{Kind: EventError, Err: err})
+	return "", err
 }
 
-// JSONResult is a convenience for tool invokers that return structured data.
-func JSONResult(v any) (string, error) {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return "", err
+// invokeParallel fans out tool invocations with errgroup, preserving the
+// original order in the returned results slice. Emits EventToolCall for
+// every call first (so the UI can render "calling X, Y, Z" at once), then
+// EventToolResult / EventToolError as each completes.
+func (a *Agent) invokeParallel(ctx context.Context, calls []llm.ToolCall, emit func(Event)) []string {
+	for _, tc := range calls {
+		emit(Event{Kind: EventToolCall, ToolName: tc.Name, ToolArgs: tc.Arguments})
 	}
-	return string(b), nil
+
+	results := make([]string, len(calls))
+	var mu sync.Mutex // serialize emits so UI sees a coherent order
+
+	eg, egCtx := errgroup.WithContext(ctx)
+	for i, tc := range calls {
+		i, tc := i, tc
+		eg.Go(func() error {
+			result, err := a.Invoker(egCtx, tc.Name, tc.Arguments)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				results[i] = fmt.Sprintf(`{"error": %q}`, err.Error())
+				emit(Event{Kind: EventToolError, ToolName: tc.Name, Err: err})
+				return nil // don't fail the whole batch
+			}
+			results[i] = result
+			emit(Event{Kind: EventToolResult, ToolName: tc.Name, ToolResult: result})
+			return nil
+		})
+	}
+	_ = eg.Wait()
+	return results
 }

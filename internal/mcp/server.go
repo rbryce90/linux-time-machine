@@ -5,8 +5,23 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+// toJSONSchema converts a generic JSON-Schema-shaped map into the SDK's
+// typed jsonschema.Schema via a marshal roundtrip.
+func toJSONSchema(m map[string]any) (*jsonschema.Schema, error) {
+	b, err := json.Marshal(m)
+	if err != nil {
+		return nil, err
+	}
+	var s jsonschema.Schema
+	if err := json.Unmarshal(b, &s); err != nil {
+		return nil, err
+	}
+	return &s, nil
+}
 
 // Server wraps the official MCP SDK. Domains register via our Tool interface;
 // this package bridges to the SDK's typed handler shape.
@@ -45,10 +60,16 @@ func (s *Server) Register(t Tool) error {
 		}, nil, nil
 	}
 
-	mcpsdk.AddTool(s.sdk, &mcpsdk.Tool{
+	sdkTool := &mcpsdk.Tool{
 		Name:        t.Name(),
 		Description: t.Description(),
-	}, handler)
+	}
+	if schema := t.Schema(); schema != nil {
+		if js, err := toJSONSchema(schema); err == nil {
+			sdkTool.InputSchema = js
+		}
+	}
+	mcpsdk.AddTool(s.sdk, sdkTool, handler)
 	return nil
 }
 

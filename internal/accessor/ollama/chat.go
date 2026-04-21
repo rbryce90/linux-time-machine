@@ -1,17 +1,12 @@
 package ollama
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 
 	"github.com/rbryce90/linux-time-machine/internal/llm"
 )
 
-// Name and Model expose provider metadata (implements llm.Provider).
 func (c *Client) Name() string  { return "ollama" }
 func (c *Client) Model() string { return c.chatModel }
 
@@ -24,45 +19,22 @@ func (c *Client) Chat(ctx context.Context, messages []llm.Message, tools []llm.T
 		Tools:    toOllamaTools(tools),
 		Stream:   false,
 	}
-	body, err := json.Marshal(req)
-	if err != nil {
-		return nil, err
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/chat", bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.http.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("ollama chat: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("ollama chat: status %s: %s", resp.Status, string(b))
-	}
-
 	var cr chatResponse
-	if err := json.NewDecoder(resp.Body).Decode(&cr); err != nil {
-		return nil, fmt.Errorf("ollama chat: decode: %w", err)
+	if err := c.postJSON(ctx, "/api/chat", req, &cr); err != nil {
+		return nil, fmt.Errorf("ollama chat: %w", err)
 	}
 
 	out := &llm.Response{Content: cr.Message.Content}
-	for i, tc := range cr.Message.ToolCalls {
+	for _, tc := range cr.Message.ToolCalls {
+		// Ollama doesn't return tool-call IDs. Leaving ID empty signals
+		// "no correlation needed" to the agent loop.
 		out.ToolCalls = append(out.ToolCalls, llm.ToolCall{
-			ID:        fmt.Sprintf("call_%d", i), // Ollama doesn't return IDs; synthesize
 			Name:      tc.Function.Name,
 			Arguments: tc.Function.Arguments,
 		})
 	}
 	return out, nil
 }
-
-// ---- Ollama wire types ----
 
 type chatRequest struct {
 	Model    string          `json:"model"`
@@ -72,10 +44,10 @@ type chatRequest struct {
 }
 
 type ollamaMessage struct {
-	Role      string             `json:"role"`
-	Content   string             `json:"content"`
-	ToolCalls []ollamaToolCall   `json:"tool_calls,omitempty"`
-	ToolName  string             `json:"tool_name,omitempty"` // for role=tool
+	Role      string           `json:"role"`
+	Content   string           `json:"content"`
+	ToolCalls []ollamaToolCall `json:"tool_calls,omitempty"`
+	ToolName  string           `json:"tool_name,omitempty"`
 }
 
 type ollamaToolCall struct {
@@ -88,7 +60,7 @@ type ollamaFunctionCall struct {
 }
 
 type ollamaTool struct {
-	Type     string       `json:"type"` // always "function"
+	Type     string       `json:"type"`
 	Function ollamaToolFn `json:"function"`
 }
 
@@ -117,13 +89,16 @@ func toOllamaMessages(in []llm.Message) []ollamaMessage {
 		if m.Role == llm.RoleTool {
 			om.ToolName = m.ToolName
 		}
-		for _, tc := range m.ToolCalls {
-			om.ToolCalls = append(om.ToolCalls, ollamaToolCall{
-				Function: ollamaFunctionCall{
-					Name:      tc.Name,
-					Arguments: tc.Arguments,
-				},
-			})
+		if len(m.ToolCalls) > 0 {
+			om.ToolCalls = make([]ollamaToolCall, 0, len(m.ToolCalls))
+			for _, tc := range m.ToolCalls {
+				om.ToolCalls = append(om.ToolCalls, ollamaToolCall{
+					Function: ollamaFunctionCall{
+						Name:      tc.Name,
+						Arguments: tc.Arguments,
+					},
+				})
+			}
 		}
 		out = append(out, om)
 	}
