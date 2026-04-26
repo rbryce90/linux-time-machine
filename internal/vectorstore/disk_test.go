@@ -340,21 +340,6 @@ func TestLoadCorruptMetadataTypeTag(t *testing.T) {
 	}
 }
 
-func TestDirOf(t *testing.T) {
-	t.Parallel()
-	cases := map[string]string{
-		"/tmp/foo.vstr":     "/tmp",
-		"/a/b/c/d.vstr":     "/a/b/c",
-		"plainfile":         ".",
-		"":                  ".",
-	}
-	for in, want := range cases {
-		if got := dirOf(in); got != want {
-			t.Errorf("dirOf(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
 func TestSaveAtomicReplace(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

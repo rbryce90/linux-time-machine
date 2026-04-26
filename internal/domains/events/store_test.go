@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"math"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -306,21 +307,6 @@ func TestSQLiteStore_EnsureSchema_Idempotent(t *testing.T) {
 	}
 }
 
-// TestRowIDStringRoundtrip ensures the canonical conversion is invertible.
-func TestRowIDStringRoundtrip(t *testing.T) {
-	cases := []int64{0, 1, 42, 1 << 30, math.MaxInt64}
-	for _, in := range cases {
-		out, err := rowIDFromString(rowIDToString(in))
-		if err != nil {
-			t.Errorf("rowIDFromString(%d) error: %v", in, err)
-			continue
-		}
-		if out != in {
-			t.Errorf("roundtrip %d -> %q -> %d", in, rowIDToString(in), out)
-		}
-	}
-}
-
 func TestVectorSnapshotPath(t *testing.T) {
 	cases := map[string]string{
 		"./linux-time-machine.db":           "./linux-time-machine.vec",
@@ -486,8 +472,8 @@ func TestSQLiteStore_SaveVectorstore_RoundTrip(t *testing.T) {
 	if len(hits) != 1 {
 		t.Fatalf("loaded.Search hits = %d, want 1", len(hits))
 	}
-	if hits[0].ID != rowIDToString(rows[0].RowID) {
-		t.Errorf("hit ID = %q, want %q", hits[0].ID, rowIDToString(rows[0].RowID))
+	if hits[0].ID != strconv.FormatInt(rows[0].RowID, 10) {
+		t.Errorf("hit ID = %q, want %q", hits[0].ID, strconv.FormatInt(rows[0].RowID, 10))
 	}
 }
 

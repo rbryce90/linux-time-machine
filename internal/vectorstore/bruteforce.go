@@ -176,6 +176,17 @@ func (s *BruteForceStore) Len() int {
 	return len(s.ids)
 }
 
+// Contains implements Store.
+func (s *BruteForceStore) Contains(id string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed {
+		return false
+	}
+	_, ok := s.index[id]
+	return ok
+}
+
 // Close implements Store. Releases the in-memory backing slices and marks
 // the store unusable. Idempotent.
 func (s *BruteForceStore) Close() error {

@@ -8,6 +8,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"path/filepath"
 )
 
 // On-disk file format (little-endian throughout).
@@ -80,7 +81,7 @@ func (s *BruteForceStore) Save(path string) error {
 		return ErrClosed
 	}
 
-	tmp, err := os.CreateTemp(dirOf(path), ".vstr-*")
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".vstr-*")
 	if err != nil {
 		return fmt.Errorf("vectorstore: create temp: %w", err)
 	}
@@ -412,14 +413,3 @@ func decodeMetaValue(tag uint8, buf []byte) (any, int, error) {
 	}
 }
 
-// dirOf returns the directory of path so os.CreateTemp places the temp file
-// on the same filesystem as the destination (rename across filesystems
-// would fail).
-func dirOf(path string) string {
-	for i := len(path) - 1; i >= 0; i-- {
-		if path[i] == os.PathSeparator {
-			return path[:i]
-		}
-	}
-	return "."
-}

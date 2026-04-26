@@ -129,6 +129,17 @@ type Store interface {
 	// returns 0.
 	Len() int
 
+	// Contains reports whether an entry with the given ID is in the store.
+	// After Close, returns false.
+	Contains(id string) bool
+
+	// Save persists the store to path. The exact format is implementation-
+	// defined; callers should treat the file as opaque and pair Save with the
+	// matching package-level Load function. Implementations should write
+	// atomically (temp file + rename) so that a crash mid-Save does not
+	// corrupt an existing snapshot.
+	Save(path string) error
+
 	// Close releases resources held by the store. After Close, all other
 	// methods return ErrClosed. Close is idempotent.
 	Close() error

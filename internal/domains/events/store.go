@@ -7,7 +7,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
-	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -18,11 +18,9 @@ import (
 //go:embed schema.sql
 var schemaSQL string
 
-// Store is the persistence surface of the events domain. Embedding storage is
-// delegated to a vectorstore.Store; the SQLite events table no longer owns an
-// embedding column. SetEmbedding writes through to the vectorstore, and
-// SemanticSearch queries the vectorstore then joins back to event rows by
-// rowid.
+// Store is the persistence surface of the events domain. Embedding storage
+// is delegated to a vectorstore.Store; SemanticSearch queries the vectorstore
+// then joins matching ids back to event rows by rowid.
 type Store interface {
 	EnsureSchema() error
 	WriteEvents([]Event) error
@@ -30,17 +28,12 @@ type Store interface {
 	Latest(limit int) ([]Event, error)
 	EventsNear(at time.Time, window time.Duration, limit int) ([]Event, error)
 
-	// Embedding pipeline. SetEmbedding upserts into the vectorstore.
-	// NeedsEmbedding returns rows whose rowid does not yet have a
-	// vectorstore entry. SemanticSearch runs vectorstore.Search and joins
-	// matching rowids back to event rows.
 	NeedsEmbedding(limit int) ([]embeddingRow, error)
 	SetEmbedding(rowid int64, vec []float32) error
 	SemanticSearch(query []float32, limit int, since time.Time) ([]Event, error)
 
-	// SaveVectorstore persists the vectorstore snapshot to disk. Called from
-	// the domain's Stop hook; safe to call concurrently with other operations
-	// (vectorstore takes a read lock during Save).
+	// SaveVectorstore persists the vectorstore snapshot. Called from the
+	// domain's Stop hook.
 	SaveVectorstore() error
 }
 
@@ -50,38 +43,17 @@ type embeddingRow struct {
 	Unit    string
 }
 
-// rowIDToString is the canonical conversion from SQLite rowid (int64) to the
-// string IDs used by vectorstore. Defined once and reused everywhere so the
-// reverse conversion in SemanticSearch is trivially correct.
-func rowIDToString(rowid int64) string {
-	return strconv.FormatInt(rowid, 10)
-}
-
-func rowIDFromString(s string) (int64, error) {
-	return strconv.ParseInt(s, 10, 64)
-}
-
-// vectorSnapshotPath returns the canonical snapshot location for a given
-// SQLite db path. e.g. "./linux-time-machine.db" -> "./linux-time-machine.vec".
-// Derived from DBPath rather than configured separately so callers can't
-// accidentally point them at different directories.
+// vectorSnapshotPath returns the snapshot location alongside the SQLite db,
+// e.g. "./linux-time-machine.db" -> "./linux-time-machine.vec". Deriving it
+// from DBPath keeps the two files in the same directory by construction.
 func vectorSnapshotPath(dbPath string) string {
 	if dbPath == "" {
 		return ""
 	}
-	if ext := extOf(dbPath); ext != "" {
+	if ext := filepath.Ext(dbPath); ext != "" {
 		return dbPath[:len(dbPath)-len(ext)] + ".vec"
 	}
 	return dbPath + ".vec"
-}
-
-func extOf(p string) string {
-	for i := len(p) - 1; i >= 0 && p[i] != '/' && p[i] != os.PathSeparator; i-- {
-		if p[i] == '.' {
-			return p[i:]
-		}
-	}
-	return ""
 }
 
 type sqliteStore struct {
@@ -147,9 +119,8 @@ func (s *sqliteStore) migrateEmbeddingColumn() error {
 		if !ok {
 			continue
 		}
-		// Skip if the vectorstore already has an entry for this rowid (e.g.
-		// snapshot was loaded and column removal was interrupted previously).
-		if err := s.vec.Upsert(context.Background(), rowIDToString(rowid), vec, nil); err != nil {
+		id := strconv.FormatInt(rowid, 10)
+		if err := s.vec.Upsert(context.Background(), id, vec, nil); err != nil {
 			return fmt.Errorf("events migration upsert rowid=%d: %w", rowid, err)
 		}
 		hydrated++
@@ -157,15 +128,12 @@ func (s *sqliteStore) migrateEmbeddingColumn() error {
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("events migration iter: %w", err)
 	}
-	rows.Close()
 
 	// Persist the snapshot before dropping the column so a crash mid-migration
 	// leaves the vectors recoverable from the BLOB column on next startup.
 	if hydrated > 0 && s.snapshotPath != "" {
-		if bf, ok := s.vec.(*vectorstore.BruteForceStore); ok {
-			if err := bf.Save(s.snapshotPath); err != nil {
-				return fmt.Errorf("events migration save snapshot: %w", err)
-			}
+		if err := s.vec.Save(s.snapshotPath); err != nil {
+			return fmt.Errorf("events migration save snapshot: %w", err)
 		}
 	}
 
@@ -236,17 +204,9 @@ func (s *sqliteStore) EventsNear(at time.Time, window time.Duration, limit int) 
 }
 
 // NeedsEmbedding returns rows whose rowid does not yet appear in the
-// vectorstore, ordered newest-first. Implementation pulls a window of recent
-// candidates from SQLite (limit*headroom) and filters out rowids whose ID is
-// already present in the vectorstore.
-//
-// Membership is determined by enumerating every ID currently in the
-// BruteForceStore via Search(K=Len()) — vectorstore v0.1 has no Contains
-// primitive, and per the refactor constraints we don't extend its public API.
-// This is O(N) per call but is only invoked at the embedder's polling
-// cadence (default 5s when idle), so it's acceptable for v0.1 single-host
-// scale (tens of thousands of events). If the vectorstore is empty or has
-// dim 0 (no vectors yet), every candidate row is "needed".
+// vectorstore, ordered newest-first. Pulls a window of recent candidates
+// from SQLite and filters out rowids already present in the vectorstore via
+// O(1) Contains checks.
 func (s *sqliteStore) NeedsEmbedding(limit int) ([]embeddingRow, error) {
 	// Pull more rows than `limit` so we can skip already-embedded ones
 	// without an extra round trip. 4x headroom is plenty in practice.
@@ -260,64 +220,30 @@ func (s *sqliteStore) NeedsEmbedding(limit int) ([]embeddingRow, error) {
 		return nil, fmt.Errorf("needs embedding: %w", err)
 	}
 	defer rows.Close()
-	var candidates []embeddingRow
+
+	out := make([]embeddingRow, 0, limit)
 	for rows.Next() {
 		var r embeddingRow
 		if err := rows.Scan(&r.RowID, &r.Unit, &r.Message); err != nil {
 			return nil, err
 		}
-		candidates = append(candidates, r)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	embedded := s.embeddedIDs()
-	out := make([]embeddingRow, 0, limit)
-	for _, c := range candidates {
-		if _, ok := embedded[rowIDToString(c.RowID)]; ok {
+		if s.vec.Contains(strconv.FormatInt(r.RowID, 10)) {
 			continue
 		}
-		out = append(out, c)
+		out = append(out, r)
 		if len(out) >= limit {
 			break
 		}
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 
-// embeddedIDs returns the set of IDs currently in the vectorstore. Returns
-// an empty (non-nil) set when the store is empty, dim is 0, or the
-// underlying type is not *BruteForceStore (in which case the embedder will
-// idempotently re-Upsert any candidates — wasteful but safe).
-func (s *sqliteStore) embeddedIDs() map[string]struct{} {
-	bf, ok := s.vec.(*vectorstore.BruteForceStore)
-	if !ok || bf == nil {
-		return map[string]struct{}{}
-	}
-	n := bf.Len()
-	if n == 0 {
-		return map[string]struct{}{}
-	}
-	dim := bf.Dim()
-	if dim == 0 {
-		return map[string]struct{}{}
-	}
-	q := make([]float32, dim)
-	q[0] = 1 // any non-zero query is fine; we only care about the IDs returned
-	hits, err := bf.Search(context.Background(), q, vectorstore.SearchOpts{K: n})
-	if err != nil {
-		return map[string]struct{}{}
-	}
-	out := make(map[string]struct{}, len(hits))
-	for _, h := range hits {
-		out[h.ID] = struct{}{}
-	}
-	return out
-}
-
 func (s *sqliteStore) SetEmbedding(rowid int64, vec []float32) error {
-	if err := s.vec.Upsert(context.Background(), rowIDToString(rowid), vec, nil); err != nil {
+	id := strconv.FormatInt(rowid, 10)
+	if err := s.vec.Upsert(context.Background(), id, vec, nil); err != nil {
 		return fmt.Errorf("set embedding: %w", err)
 	}
 	return nil
@@ -341,7 +267,7 @@ func (s *sqliteStore) SemanticSearch(query []float32, limit int, since time.Time
 	// Convert hit IDs -> rowids preserving rank order.
 	rowids := make([]int64, 0, len(hits))
 	for _, h := range hits {
-		id, err := rowIDFromString(h.ID)
+		id, err := strconv.ParseInt(h.ID, 10, 64)
 		if err != nil {
 			continue // malformed id — skip rather than fail the whole query
 		}
@@ -423,18 +349,13 @@ func (s *sqliteStore) eventsByRowIDs(rowids []int64, since time.Time) (map[int64
 	return out, nil
 }
 
-// SaveVectorstore writes the vectorstore snapshot to disk if the underlying
-// implementation supports it. Called from the events Domain's Stop lifecycle
-// hook.
+// SaveVectorstore writes the vectorstore snapshot to disk. Called from the
+// events Domain's Stop lifecycle hook. No-op if no snapshot path is set.
 func (s *sqliteStore) SaveVectorstore() error {
 	if s.snapshotPath == "" {
 		return nil
 	}
-	bf, ok := s.vec.(*vectorstore.BruteForceStore)
-	if !ok {
-		return nil
-	}
-	return bf.Save(s.snapshotPath)
+	return s.vec.Save(s.snapshotPath)
 }
 
 // decodeLegacyVector decodes the old []float32 BLOB layout used by the
