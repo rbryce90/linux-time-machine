@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	_ "embed"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
 	"path/filepath"
@@ -31,6 +32,11 @@ type Store interface {
 	NeedsEmbedding(limit int) ([]embeddingRow, error)
 	SetEmbedding(rowid int64, vec []float32) error
 	SemanticSearch(query []float32, limit int, since time.Time) ([]Event, error)
+
+	// PurgeOlderThan deletes events with ts < cutoff from SQLite and removes
+	// their corresponding embeddings from the vectorstore. Returns the number
+	// of events deleted. Safe to call concurrently with other store operations.
+	PurgeOlderThan(cutoff time.Time) (int, error)
 
 	// SaveVectorstore persists the vectorstore snapshot. Called from the
 	// domain's Stop hook.
@@ -347,6 +353,72 @@ func (s *sqliteStore) eventsByRowIDs(rowids []int64, since time.Time) (map[int64
 		return nil, err
 	}
 	return out, nil
+}
+
+// PurgeOlderThan deletes events older than cutoff from SQLite and removes
+// their embeddings from the vectorstore. Returns the count of SQLite rows
+// removed.
+//
+// Why: we delete from the vectorstore *before* SQLite. A crash between the
+// two leaves orphan rowids in SQLite whose embeddings are gone — the embedder
+// will simply re-embed them, and the next retention pass will purge them
+// again. The reverse order would leave phantom IDs in the vectorstore that
+// no rowid in SQLite ever points to and that no code path cleans up.
+//
+// ErrNotFound from the vectorstore is expected and ignored — rows whose
+// embeddings haven't been computed yet won't be in the vectorstore.
+//
+// After SQLite deletion, the vectorstore snapshot is rewritten so the
+// deletion survives a crash before the domain's Stop hook fires.
+func (s *sqliteStore) PurgeOlderThan(cutoff time.Time) (int, error) {
+	rows, err := s.db.Query(
+		`SELECT rowid FROM events WHERE ts < ?`, cutoff.UnixNano())
+	if err != nil {
+		return 0, fmt.Errorf("purge scan rowids: %w", err)
+	}
+	rowids := make([]int64, 0)
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("purge scan row: %w", err)
+		}
+		rowids = append(rowids, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, fmt.Errorf("purge iter: %w", err)
+	}
+	rows.Close()
+
+	if len(rowids) == 0 {
+		return 0, nil
+	}
+
+	ctx := context.Background()
+	for _, id := range rowids {
+		idStr := strconv.FormatInt(id, 10)
+		if err := s.vec.Delete(ctx, idStr); err != nil && !errors.Is(err, vectorstore.ErrNotFound) {
+			return 0, fmt.Errorf("purge vectorstore delete rowid=%d: %w", id, err)
+		}
+	}
+
+	res, err := s.db.Exec(`DELETE FROM events WHERE ts < ?`, cutoff.UnixNano())
+	if err != nil {
+		return 0, fmt.Errorf("purge delete sqlite: %w", err)
+	}
+	deleted, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("purge rows affected: %w", err)
+	}
+
+	if s.snapshotPath != "" {
+		if err := s.vec.Save(s.snapshotPath); err != nil {
+			return int(deleted), fmt.Errorf("purge save snapshot: %w", err)
+		}
+	}
+
+	return int(deleted), nil
 }
 
 // SaveVectorstore writes the vectorstore snapshot to disk. Called from the

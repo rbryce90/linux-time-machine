@@ -134,6 +134,7 @@ A few choices worth calling out, because they bound the project's identity:
 - SQLite time-series with WAL concurrency
 - Embedded vector store (`internal/vectorstore`) with snapshot persistence
 - Semantic search over journald via Ollama embeddings
+- Daily retention pass deletes events older than 90 days (configurable) from SQLite and the vectorstore
 - MCP stdio server with typed tool schemas
 - Parallel tool invocation in the agent layer
 - Stdlib-only test suite, `go vet` clean, race-tested. Core packages well-covered (`vectorstore` 84%, `agent` 98%, `storage` 80%, `mcp` 73%, `types` 100%); domain code (`system`, `events`) and the TUI host are integration-tested but have lower line coverage.
@@ -146,7 +147,7 @@ A few choices worth calling out, because they bound the project's identity:
 ### Planned
 - In-app chat panel (talk to a local LLM inside the TUI; agent + llm packages exist, no TUI wiring yet)
 - Network flow tracking (`/proc/net` + GeoIP + threat intel)
-- Retention policies for time-series tables
+- Retention for system metrics tables (events retention shipped; system metrics still grow unbounded)
 - Precompiled release binaries published to GitHub Releases
 
 ## Known limitations

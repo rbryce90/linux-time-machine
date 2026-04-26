@@ -36,7 +36,9 @@ func main() {
 	}
 
 	if cfg.Domains.Events.Enabled {
-		a.Registry.Register(events.New(events.Config{}))
+		a.Registry.Register(events.New(events.Config{
+			RetentionDays: cfg.Domains.Events.RetentionDays,
+		}))
 	}
 
 	// Future: network domain registers here behind its toggle.
