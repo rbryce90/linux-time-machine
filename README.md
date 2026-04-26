@@ -136,15 +136,15 @@ A few choices worth calling out, because they bound the project's identity:
 - Semantic search over journald via Ollama embeddings
 - MCP stdio server with typed tool schemas
 - Parallel tool invocation in the agent layer
-- Stdlib-only test suite (≈80% coverage on testable logic), `go vet` clean, race-tested
+- Stdlib-only test suite, `go vet` clean, race-tested. Core packages well-covered (`vectorstore` 84%, `agent` 98%, `storage` 80%, `mcp` 73%, `types` 100%); domain code (`system`, `events`) and the TUI host are integration-tested but have lower line coverage.
 - Per-PR GitHub Actions check (`go vet`, `go test`, `go build`)
 - Goreleaser config for Linux amd64/arm64 release binaries
 
 ### In-flight (next release)
-- In-app chat panel (talk to a local LLM inside the TUI)
-- `--http` transport so a persistent collector can serve multiple clients
+- `--http` transport so a persistent collector can serve multiple clients (no code yet on `main`; design notes only)
 
 ### Planned
+- In-app chat panel (talk to a local LLM inside the TUI; agent + llm packages exist, no TUI wiring yet)
 - Network flow tracking (`/proc/net` + GeoIP + threat intel)
 - Retention policies for time-series tables
 - Precompiled release binaries published to GitHub Releases
