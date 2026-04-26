@@ -1,0 +1,34 @@
+version: 2
+
+project_name: linux-time-machine
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - main: ./cmd/linux-time-machine
+    binary: linux-time-machine
+    env:
+      - CGO_ENABLED=0
+    goos: [linux]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w
+
+archives:
+  - formats: [tar.gz]
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: 'checksums.txt'
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
