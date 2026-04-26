@@ -13,7 +13,10 @@ import (
 )
 
 type Config struct {
-	// Future: filter priorities, include/exclude units, max retention, etc.
+	// RetentionDays bounds how long events stay in SQLite + vectorstore.
+	// A daily background pass deletes anything older. Zero or negative
+	// disables retention entirely.
+	RetentionDays int
 }
 
 type Domain struct {
@@ -62,6 +65,7 @@ func (d *Domain) Start(ctx context.Context, deps app.Deps) error {
 	d.cancel = cancel
 	go d.collector.Run(runCtx)
 	go d.embedder.run(runCtx)
+	go runRetention(runCtx, d.store, d.cfg.RetentionDays)
 	return nil
 }
 

@@ -24,6 +24,11 @@ type DomainToggles struct {
 type DomainConfig struct {
 	Enabled        bool `json:"enabled"`
 	SampleInterval int  `json:"sample_interval_seconds"`
+	// RetentionDays bounds how long the domain keeps row-level history.
+	// A daily retention pass deletes rows older than this many days from
+	// both SQLite and (where applicable) the vectorstore. Zero or negative
+	// disables retention — rows accumulate indefinitely.
+	RetentionDays int `json:"retention_days"`
 }
 
 func DefaultConfig() Config {
@@ -31,7 +36,7 @@ func DefaultConfig() Config {
 		DBPath: "./" + Name + ".db",
 		Domains: DomainToggles{
 			System:  DomainConfig{Enabled: true, SampleInterval: 1},
-			Events:  DomainConfig{Enabled: true, SampleInterval: 0},
+			Events:  DomainConfig{Enabled: true, SampleInterval: 0, RetentionDays: 90},
 			Network: DomainConfig{Enabled: false, SampleInterval: 2},
 		},
 	}
