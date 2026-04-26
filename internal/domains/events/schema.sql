@@ -4,8 +4,7 @@ CREATE TABLE IF NOT EXISTS events (
   unit      TEXT,                 -- systemd unit that emitted this entry
   source    TEXT,                 -- SYSLOG_IDENTIFIER or _COMM
   pid       INTEGER,
-  message   TEXT NOT NULL,
-  embedding BLOB                  -- NULL until background embedder fills it
+  message   TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_ts ON events (ts);

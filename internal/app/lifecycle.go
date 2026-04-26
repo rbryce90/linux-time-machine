@@ -61,7 +61,7 @@ func (a *App) Run(parent context.Context) error {
 	}
 	pingCancel()
 
-	deps := Deps{DB: a.DB.DB, MCP: a.MCP, TUI: a.TUI, Ollama: a.Ollama}
+	deps := Deps{DB: a.DB.DB, DBPath: a.DB.Path, MCP: a.MCP, TUI: a.TUI, Ollama: a.Ollama}
 	if err := a.Registry.StartAll(ctx, deps); err != nil {
 		return fmt.Errorf("registry start: %w", err)
 	}
