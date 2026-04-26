@@ -38,7 +38,7 @@ All tools advertise typed JSON schemas so even smaller local models (Llama 3B, Q
 ### Prerequisites
 
 - Linux with systemd
-- Go 1.22+
+- Go 1.25+
 - *Optional*: [Ollama](https://ollama.com) with `nomic-embed-text` pulled, for semantic search
 
 ### Build from source
@@ -99,6 +99,8 @@ Domain-driven Go with each subsystem self-contained under `internal/domains/*`:
 internal/
 ├── app/          # config, registry, lifecycle
 ├── storage/      # shared SQLite with WAL
+├── vectorstore/  # embedded vector index (brute-force cosine, snapshot-to-disk);
+│                 # designed for extraction to its own module
 ├── mcp/          # Tool interface + server on top of the official MCP SDK
 ├── tui/          # bubbletea host + Tokyo Night theme
 ├── accessor/
@@ -109,21 +111,34 @@ internal/
 └── domains/
     ├── system/   # gopsutil collector → SQLite, TUI panel, MCP tools
     └── events/   # journalctl subprocess + background embedder,
-                  # SQLite with embedding BLOB, semantic search
+                  # SQLite for event metadata, vectorstore for embeddings
 ```
 
 Adding a new domain is one folder + one line in `cmd/linux-time-machine/main.go`.
 
+## Design decisions
+
+A few choices worth calling out, because they bound the project's identity:
+
+- **Pure Go, no CGO.** Uses `modernc/sqlite` (pure-Go SQLite reimplementation) rather than `mattn/go-sqlite3`. The cost is some performance and no SQLite extensions; the win is `go install` works on any Linux box without a C toolchain, and `goreleaser` cross-compiles cleanly.
+- **Embedded vector store, not a library.** Rather than depending on LanceDB / Qdrant / pgvector, `internal/vectorstore` is a small in-house brute-force index with snapshot-to-disk persistence. At single-machine scale (< ~50k vectors) this is faster than an ANN index and keeps the single-binary distribution intact. `Store` is an interface, so swapping in HNSW or `sqlite-vec` later is one implementation away.
+- **Separate domains own their tables and queries.** No shared "ORM" layer; each domain (`system`, `events`) owns its schema and access patterns. Adding a new domain doesn't require touching anything but its own folder and one line in `main.go`.
+- **MCP as the integration point, not a REST API.** The tool-call surface is what an LLM consumes; HTTP endpoints would just be a second adaptation layer. v0.2 may add `--http` for multi-client deployments, but stdio MCP is the v0.1 contract.
+
 ## Status
 
-**v0.1** — working, shippable for single-user use.
+**v0.1** — working, shippable for single-user use. Test suite in place, CI green on every PR, race-clean.
 
 ### Working
 - TUI with live + historical modes
 - SQLite time-series with WAL concurrency
+- Embedded vector store (`internal/vectorstore`) with snapshot persistence
 - Semantic search over journald via Ollama embeddings
 - MCP stdio server with typed tool schemas
 - Parallel tool invocation in the agent layer
+- Stdlib-only test suite (≈80% coverage on testable logic), `go vet` clean, race-tested
+- Per-PR GitHub Actions check (`go vet`, `go test`, `go build`)
+- Goreleaser config for Linux amd64/arm64 release binaries
 
 ### In-flight (next release)
 - In-app chat panel (talk to a local LLM inside the TUI)
@@ -132,8 +147,7 @@ Adding a new domain is one folder + one line in `cmd/linux-time-machine/main.go`
 ### Planned
 - Network flow tracking (`/proc/net` + GeoIP + threat intel)
 - Retention policies for time-series tables
-- Tests + CI
-- Precompiled release binaries
+- Precompiled release binaries published to GitHub Releases
 
 ## Known limitations
 
