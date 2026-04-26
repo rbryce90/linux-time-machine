@@ -14,6 +14,7 @@ import (
 // need something simply ignores it. Ollama may be nil if unavailable.
 type Deps struct {
 	DB     *sql.DB
+	DBPath string // filesystem path of DB; used by domains to derive sibling paths (e.g. vector snapshots)
 	MCP    *mcp.Server
 	TUI    *tui.App
 	Ollama *ollama.Client
